@@ -211,9 +211,9 @@ class Labels:
     print("Rater:")
     [print(df) for df in self.rater_dfs.values()]
     print("Top 5: Accuracy")
-    print(lbls.top5(lbls.te_df, "avg_accuracy"))
+    print(self.top5(self.te_df, "avg_accuracy"))
     print("Bottom 5: Accuracy")
-    print(lbls.bottom5(lbls.te_df, "avg_accuracy"))
+    print(self.bottom5(self.te_df, "avg_accuracy"))
     print("Stats")
     print(self.stats_df.T)
     print("Interrater-Reliability Analysis")
@@ -309,10 +309,10 @@ if __name__ == "__main__":
   off_meshes.load("off")
   off_meshes.compute_stats()
   off_meshes.print_stats()
-  stl_meshes = Meshes(d=DATA_DIR)
-  stl_meshes.load("stl")
-  stl_meshes.compute_stats()
-  stl_meshes.print_stats()
+  #stl_meshes = Meshes(d=DATA_DIR)
+  #stl_meshes.load("stl")
+  #stl_meshes.compute_stats()
+  #stl_meshes.print_stats()
 
   # TODO:
   # shape comparison:
