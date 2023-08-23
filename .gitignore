@@ -1,5 +1,6 @@
 # Custom
 
+*.stl
 *.swp
 *.old.py
 data
