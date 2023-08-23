@@ -230,9 +230,9 @@ class Meshes:
   
   def init_df(self):
     self.fnames = {}
-    self.fnames["train"] = [i.stem for i in (self.d / "train" / "off").glob(f"*.off")][:5] # only for testing to make it faster
-    self.fnames["val"] = [i.stem for i in (self.d / "val" / "off").glob(f"*.off")][:3]
-    self.fnames["test"] = [i.stem for i in (self.d / "test" / "off").glob(f"*.off")][2]
+    self.fnames["train"] = [i.stem for i in (self.d / "train" / "off").glob(f"*.off")]
+    self.fnames["val"] = [i.stem for i in (self.d / "val" / "off").glob(f"*.off")]
+    self.fnames["test"] = [i.stem for i in (self.d / "test" / "off").glob(f"*.off")]
     mesh_df = pd.DataFrame({
       "id": self.fnames["train"] + self.fnames["val"] + self.fnames["test"],
       "split": ["train"] * len(self.fnames["train"]) + ["val"] * len(self.fnames["val"]) + ["test"] * len(self.fnames["test"])
@@ -305,7 +305,20 @@ if __name__ == "__main__":
   del lbls
 
   # meshes analysis
-  meshes = Meshes(d=DATA_DIR)
-  meshes.load("off")
-  meshes.compute_stats()
-  meshes.print_stats()
+  off_meshes = Meshes(d=DATA_DIR)
+  off_meshes.load("off")
+  off_meshes.compute_stats()
+  off_meshes.print_stats()
+  stl_meshes = Meshes(d=DATA_DIR)
+  stl_meshes.load("stl")
+  stl_meshes.compute_stats()
+  stl_meshes.print_stats()
+
+  # TODO:
+  # shape comparison:
+  # - hausdorff
+  # - spectral analysis via eigenvectors/values, laplacian
+
+  # feature comparison:
+  # - crop out feature vectors for each rater
+  # - compare variance etc. in their centroids
