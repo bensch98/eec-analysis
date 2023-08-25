@@ -1,16 +1,20 @@
+from concurrent.futures import ThreadPoolExecutor
 from itertools import combinations
 from pathlib import Path
 import shutil
 
+from irrCAC.raw import CAC
 import numpy as np
 import open3d as o3d
 import pandas as pd
 from scipy import stats
-from scipy.stats import kurtosis, skew, ttest_rel
+from scipy.spatial.distance import directed_hausdorff
+from scipy.stats import kurtosis, skew, ttest_rel, mode
 from sklearn.metrics import cohen_kappa_score, accuracy_score, precision_score, recall_score, f1_score, jaccard_score
 from statsmodels.stats.inter_rater import fleiss_kappa
 
-from irrCAC.raw import CAC
+import geometry
+from features import Component
 
 # global options
 pd.set_option('display.max_rows', None)
@@ -22,6 +26,7 @@ SPLITS = ["train", "val", "test"]
 NP_DESCRIPTIVE_STATS = ["mean", "median", "std", "var", "min", "max"]
 SCIPY_DESCRIPTIVE_STATS = ["kurtosis", "skew"]
 FORMATS = ["off", "obj", "stl"]
+o3d.utility.random.seed(420)
 
 class Labels:
   scores = ["accuracy", "precision", "recall", "f1_score", "jaccard"]
@@ -33,8 +38,7 @@ class Labels:
     self.tr_df, self.val_df, self.te_df = self.init_df()
   
   @property
-  def dfs(self):
-    return [self.tr_df, self.val_df, self.te_df]
+  def dfs(self): return [self.tr_df, self.val_df, self.te_df]
 
   def init_df(self):
     tr_fnames = [i.stem for i in (self.d / "train" / "txt").glob("*.txt")]
@@ -45,18 +49,18 @@ class Labels:
     self.te_df = pd.DataFrame({"id": te_fnames})
     return self.tr_df, self.val_df, self.te_df
 
-  def _load_txt(self, f, fullpath): return np.loadtxt(fullpath, dtype=int)
+  def _load_txt(self, f): return np.loadtxt(f, dtype=int)
 
   def load_raters(self):
     self.rater_dfs = {}
     for i in range(self.n_raters):
       df = self.te_df.copy()
-      df["labels"] = df.apply(lambda row: self._load_txt(row["id"], self.d / f"test_raters/{i}/{row['id']}.txt"), axis=1)
+      df["labels"] = df.apply(lambda row: self._load_txt(self.d / f"test_raters/{i}/{row['id']}.txt"), axis=1)
       self.rater_dfs[i] = df
   
   def load(self):
-    self.tr_df["labels"] = self.tr_df.apply(lambda row: self._load_txt(row["id"], self.d / f"train/txt/{row['id']}.txt"), axis=1)
-    self.val_df["labels"] = self.val_df.apply(lambda row: self._load_txt(row["id"], self.d / f"val/txt/{row['id']}.txt"), axis=1)
+    self.tr_df["labels"] = self.tr_df.apply(lambda row: self._load_txt(self.d / f"train/txt/{row['id']}.txt"), axis=1)
+    self.val_df["labels"] = self.val_df.apply(lambda row: self._load_txt(self.d / f"val/txt/{row['id']}.txt"), axis=1)
 
   def _maj_vote(self, row):
     votes = np.array([df.loc[row.name, "labels"] for df in self.rater_dfs.values()])
@@ -66,10 +70,13 @@ class Labels:
   def majority_vote(self):
     self.te_df["labels"] = self.te_df.apply(self._maj_vote, axis=1)
   
+  @staticmethod
+  def extract_mode(x): return mode(x, keepdims=False).mode
+  
   def _compute_descriptive_statistics_row(self, df):
     # descriptive stats
-    df["mean"] = df["labels"].apply(np.mean)
-    df["median"] = df["labels"].apply(np.median)
+    df["mode"] = df["labels"].apply(Labels.extract_mode)
+    df["median"] = df["labels"].apply(np.median).astype(int)
     df["std"] = df["labels"].apply(np.std)
     df["var"] = df["labels"].apply(np.var)
     df["min"] = df["labels"].apply(np.min)
@@ -95,7 +102,7 @@ class Labels:
     arr = np.concatenate(df["labels"].values)
     stats_dict = {
       "source": src,
-      "mean": arr.mean(),
+      "mode": mode(arr, keepdims=False).mode,
       "median": np.median(arr),
       "std": arr.std(),
       "var": arr.var(),
@@ -160,7 +167,6 @@ class Labels:
     index = pd.MultiIndex.from_tuples(combs, names=("rater1", "rater2"))
     df = pd.DataFrame(index=index, columns=self.scores)
     df[:] = None
-
     # ttests
     for score in self.scores:
       for comb in combs:
@@ -185,6 +191,7 @@ class Labels:
     column_names = [i for i in range(self.ratings_arr.shape[1])]
     self.ratings_df = pd.DataFrame(self.ratings_arr, columns=column_names)
     cac = CAC(self.ratings_df, categories=list(range(5)))
+    cac.confidence_level = 0.95
     cacs = {}
     cacs["bp"] = cac.bp()
     cacs["conger"] = cac.conger()
@@ -206,20 +213,20 @@ class Labels:
     self.cacs = pd.DataFrame(data, columns=["coefficient", "value", "confidence interval", "p-value", "observed agreement (pa)", "expected agreement (pe)"])
   
   def print_stats(self):
-    print("Train/Val/Test:")
-    [print(df) for df in self.dfs]
-    print("Rater:")
+    #print("Train/Val/Test:")
+    #[print(df) for df in self.dfs]
+    #print("Rater:")
     [print(df) for df in self.rater_dfs.values()]
-    print("Top 5: Accuracy")
-    print(self.top5(self.te_df, "avg_accuracy"))
-    print("Bottom 5: Accuracy")
-    print(self.bottom5(self.te_df, "avg_accuracy"))
-    print("Stats")
-    print(self.stats_df.T)
-    print("Interrater-Reliability Analysis")
-    print(self.interr_df)
-    print("Chance-Corrected Agreement Coefficients")
-    print(self.cacs)
+    #print("Top 5: Accuracy")
+    #print(self.top5(self.te_df, "avg_accuracy"))
+    #print("Bottom 5: Accuracy")
+    #print(self.bottom5(self.te_df, "avg_accuracy"))
+    #print("Stats")
+    #print(self.stats_df.T)
+    #print("Interrater-Reliability Analysis")
+    #print(self.interr_df)
+    #print("Chance-Corrected Agreement Coefficients")
+    #print(self.cacs)
 
 class Meshes:
   formats = ["off", "obj", "stl"]
@@ -233,18 +240,21 @@ class Meshes:
     self.fnames["train"] = [i.stem for i in (self.d / "train" / "off").glob(f"*.off")]
     self.fnames["val"] = [i.stem for i in (self.d / "val" / "off").glob(f"*.off")]
     self.fnames["test"] = [i.stem for i in (self.d / "test" / "off").glob(f"*.off")]
+    #self.fnames["train"] = self.fnames["train"][:1]
+    #self.fnames["val"] = self.fnames["val"][:1]
+    #self.fnames["test"] = self.fnames["test"][:1]
     mesh_df = pd.DataFrame({
       "id": self.fnames["train"] + self.fnames["val"] + self.fnames["test"],
       "split": ["train"] * len(self.fnames["train"]) + ["val"] * len(self.fnames["val"]) + ["test"] * len(self.fnames["test"])
     })
     return mesh_df
   
-  def _load_mesh(self, fpath):
-    mesh = o3d.io.read_triangle_mesh(str(fpath))
-    return np.asarray(mesh.vertices, dtype=np.float32), np.asarray(mesh.triangles, dtype=np.int32)
-
+  def _load_mesh(self, fpath): return o3d.io.read_triangle_mesh(str(fpath))
   def load(self, fmt):
-    self.mesh_df[["vertices", "faces"]] = self.mesh_df.apply(lambda row: pd.Series(self._load_mesh(self.d / f"{row['split']}/{fmt}/{row['id']}.{fmt}")), axis=1)
+    self.mesh_df["mesh"] = self.mesh_df.apply(lambda row: pd.Series(self._load_mesh(self.d / f"{row['split']}/{fmt}/{row['id']}.{fmt}")), axis=1)
+
+  @staticmethod
+  def vf(mesh): return np.asarray(mesh.vertices, dtype=np.float32), np.asarray(mesh.triangles, dtype=np.int32)
 
   def _triangle_area(self, v1, v2, v3): return 0.5 * np.linalg.norm(np.cross(v2-v1, v3-v1))
   def _mesh_surface_area(self, vertices, faces): return sum(self._triangle_area(vertices[f[0]], vertices[f[1]], vertices[f[2]]) for f in faces)
@@ -256,9 +266,9 @@ class Meshes:
       tetrahedron_volume = np.dot(reference_point - v1, np.cross(v2 - v1, v3 - v1)) / 6
       volume += tetrahedron_volume
     return abs(volume)
-
+  
   def _compute_descriptive_stats(self, row):
-    vertices, faces = row["vertices"], row["faces"]
+    vertices, faces = Meshes.vf(row["mesh"])
     # number of vertices, faces
     n_vertices, n_faces = vertices.shape[0], faces.shape[0]
     # mean, std, min, max coordinates
@@ -277,6 +287,9 @@ class Meshes:
       "std_x": std_coord[0], "std_y": std_coord[1], "std_z": std_coord[2],
       "min_x": min_coord[0], "min_y": min_coord[1], "min_z": min_coord[2],
       "max_x": max_coord[0], "max_y": max_coord[1], "max_z": max_coord[2],
+      "width": max_coord[0] - min_coord[0],
+      "height": max_coord[1] - min_coord[1],
+      "depth": max_coord[2] - min_coord[2],
       "surface_area": surface_area,
       "volume": volume,
     })
@@ -284,41 +297,197 @@ class Meshes:
   def compute_stats(self):
     stats_df = self.mesh_df.apply(self._compute_descriptive_stats, axis=1)
     self.mesh_df = pd.concat([self.mesh_df, stats_df], axis=1)
+    self.mesh_df["n_vertices"] = self.mesh_df["n_vertices"].astype(int)
+    self.mesh_df["n_faces"] = self.mesh_df["n_faces"].astype(int)
   
-  def print_stats(self):
-    print(self.mesh_df)
+  def print_stats(self): print(self.mesh_df)
+
+class FeatureComparison:
+  def __init__(self, d, df_meshes, df_raters, n_classes=5):
+    self.d = d
+    self.df_meshes = df_meshes[df_meshes["split"] == "test"]
+    self.n_classes = n_classes
+    self.df_raters = {k: pd.merge(self.df_meshes, df, on="id") for k, df in df_raters.items()}
+    self.df_raters = {k: df[["id", "split", "mesh", "labels"]] for k, df in self.df_raters.items()}
+  
+  def _extract_features(self, row, fmt):
+    split, mesh_id = row["split"], row["id"]
+    comp = Component(self.d, split, fmt, mesh_id, 5)
+    comp_features = comp.cluster_components()
+    for val in comp_features.values():
+      if not val: continue
+      for compfeat in val:
+        if len(compfeat._mesh.vertices) > 0:
+          compfeat.compute_metrics()
+    return comp_features
+
+  def extract_features(self, fmt):
+    for df in self.df_raters.values():
+      df["features"] = df.apply(lambda row: self._extract_features(row, fmt), axis=1)
+  
+  def convert(self):
+    id_values, class_values, feature_values = [], [], []
+    for id, features_dict in self.df_raters[0][["id", "features"]].iterrows():
+      for class_id, features in features_dict.items():
+        for i, feature in enumerate(features):
+          id_values.append(id)
+          class_values.append(class_id)
+          feature_values.append(i)
+
+    id_values, class_values, feature_values = [], [], []
+    multi_idx = pd.MultiIndex.from_tuples(
+      list(zip(id_values, class_values, feature_values)),
+      names=["id", "class", "feature"]
+    )
+    self.df = pd.DataFrame(index=multi_idx)
+  
+  def print(self):
+    [print(df) for df in self.df_raters.values()]
+    print(self.df)
+
+class ShapeComparison:
+  def __init__(self, df1, df2, fmts=("off", "stl")):
+    self.df1 = df1
+    self.df2 = df2
+    self.df_fmts = fmts
+    self.df = pd.DataFrame(self.df1["id"])
+    self.df.reset_index(drop=True, inplace=True)
+  
+  def compute_hausdorff_distance(self):
+    # directed hausdorff distance
+    hausdorff_distances, max_indices, formats = [], [], []
+    for (idx1, row1), (idx2, row2) in zip(self.df1.iterrows(), self.df2.iterrows()):
+      v1, _ = Meshes.vf(row1["mesh"])
+      v2, _ = Meshes.vf(row2["mesh"])
+      dist1, idx1, _ = directed_hausdorff(v1, v2)
+      dist2, idx2, _ = directed_hausdorff(v2, v1)
+      if dist1 > dist2:
+        max_dist = dist1
+        max_idx = idx1
+        fmt = self.df_fmts[0]
+      else:
+        max_dist = dist2
+        max_idx = idx2
+        fmt = self.df_fmts[0]
+      hausdorff_distances.append(max_dist)
+      max_indices.append(max_idx)
+      formats.append(fmt)
+    self.df["hausdorff_distance"] = hausdorff_distances
+    self.df["hausdorff_max_index"] = max_indices
+    self.df["hausdorff_fmt"] = formats
+  
+  def compute_optimal_transport_distance(self):
+    optimal_transport_distances = []
+    for (_, row1), (_, row2) in zip(self.df1.iterrows(), self.df2.iterrows()):
+      n = min(row1["n_vertices"], row2["n_vertices"])
+      v1 = np.asarray(row1["mesh"].sample_points_poisson_disk(n).points, dtype=np.float32)
+      v2 = np.asarray(row2["mesh"].sample_points_poisson_disk(n).points, dtype=int)
+      dist = geometry.optimal_transport_distance(v1, v2)
+      optimal_transport_distances.append(dist)
+    self.df["optimal_transport_distance"] = optimal_transport_distances
+  
+  def compute_shape_distribution_distance(self):
+    shape_distribution_distances = []
+    for (_, row1), (_, row2) in zip(self.df1.iterrows(), self.df2.iterrows()):
+      v1, _ = Meshes.vf(row1["mesh"])
+      v2, _ = Meshes.vf(row2["mesh"])
+      dist = geometry.shape_distribution_distance(v1, v2)
+      shape_distribution_distances.append(dist)
+    self.df["shape_distribution_distance"] = shape_distribution_distances
+  
+  def compute_chamfer_distance(self):
+    chamfer_distances = []
+    for (_, row1), (_, row2) in zip(self.df1.iterrows(), self.df2.iterrows()):
+      v1, _ = Meshes.vf(row1["mesh"])
+      v2, _ = Meshes.vf(row2["mesh"])
+      dist = geometry.chamfer_distance(v1, v2)
+      chamfer_distances.append(dist)
+    self.df["chamfer_distance"] = chamfer_distances
+
+  def compute_heat_kernel_signature(self):
+    hks = []
+    n_time_scales = 16
+    time_scales = np.logspace(-2, 0., num=n_time_scales)
+    for (_, row1), (_, row2) in zip(self.df1.iterrows(), self.df2.iterrows()):
+      print("HKS1")
+      hks1 = geometry.compute_hks(np.asarray(row1["mesh"].vertices, dtype=np.float32), np.asarray(row1["mesh"].triangles, dtype=int), time_scales)
+      print("HKS2")
+      hks2 = geometry.compute_hks(np.asarray(row2["mesh"].vertices, dtype=np.float32), np.asarray(row2["mesh"].triangles, dtype=int), time_scales)
+      hks.append(geometry.compare_hks(hks1, hks2, n_time_scales))
+    self.df["heat_kernel_signature"] = hks
+
+  def print(self): print(self.df)
+
+def helper(df):
+  for _, row in df.iterrows():
+    fname = row["id"]
+    max = row["hausdorff_max_index"]
+    off = o3d.io.read_triangle_mesh(str(DATA_DIR / "train" / "off" / (fname+".off"))).compute_vertex_normals()
+    stl = o3d.io.read_triangle_mesh(str(DATA_DIR / "train" / "stl" / (fname+".stl"))).compute_vertex_normals()
+    off_ls = o3d.cuda.pybind.geometry.LineSet().create_from_triangle_mesh(off)
+    stl_ls = o3d.cuda.pybind.geometry.LineSet().create_from_triangle_mesh(stl.translate((30, 0, 0)))
+    pcd = o3d.cuda.pybind.geometry.PointCloud()
+    pcd.points = o3d.cuda.pybind.utility.Vector3dVector(np.asarray(stl.vertices)[max, np.newaxis])
+    o3d.visualization.draw_geometries([off_ls, stl_ls, pcd])
+    return
 
 if __name__ == "__main__":
-  # labels analysis
-  lbls = Labels(d=DATA_DIR, n_labels=5)
-  lbls.load_raters()
-  lbls.load()
-  lbls.majority_vote()
-  lbls.compute_stats()
-  lbls.compute_individual_statistics()
-  lbls.compare_rater2gt()
-  lbls.compare_mv2avg()
-  lbls.compute_interrater_reliability()
-  lbls.chance_corrected_agreement_coefficients()
-  # print
-  lbls.print_stats()
-  del lbls
+  if True:
+    # labels analysis
+    lbls = Labels(d=DATA_DIR, n_labels=5)
+    lbls.load_raters()
+    lbls.load()
+    lbls.majority_vote()
+    lbls.compute_stats()
+    lbls.compute_individual_statistics()
+    lbls.compare_rater2gt()
+    lbls.compare_mv2avg()
+    lbls.compute_interrater_reliability()
+    lbls.chance_corrected_agreement_coefficients()
+    # print
+    lbls.print_stats()
 
-  # meshes analysis
-  off_meshes = Meshes(d=DATA_DIR)
-  off_meshes.load("off")
-  off_meshes.compute_stats()
-  off_meshes.print_stats()
-  #stl_meshes = Meshes(d=DATA_DIR)
-  #stl_meshes.load("stl")
-  #stl_meshes.compute_stats()
-  #stl_meshes.print_stats()
+  if True:
+    # meshes analysis
+    off_meshes = Meshes(d=DATA_DIR)
+    off_meshes.load("off")
+    off_meshes.compute_stats()
+    off_meshes.print_stats()
+  if False:
+    stl_meshes = Meshes(d=DATA_DIR)
+    stl_meshes.load("stl")
+    stl_meshes.compute_stats()
+    stl_meshes.print_stats()
+
+  # feature comparison
+  if True:
+    feature_compare = FeatureComparison(DATA_DIR, off_meshes.mesh_df, lbls.rater_dfs, n_classes=5)
+    feature_compare.extract_features("off")
+    feature_compare.convert()
+    feature_compare.print()
+
+  if False:
+    # shape comparison
+    print("\nShape Comparison:")
+    sc = ShapeComparison(off_meshes.mesh_df, stl_meshes.mesh_df)
+    print("Hausdorff Distance")
+    sc.compute_hausdorff_distance()
+    print("Optimal Transport Distance")
+    sc.compute_optimal_transport_distance()
+    print("Shape Distribution Distance")
+    sc.compute_shape_distribution_distance()
+    print("Chamfer Distance")
+    sc.compute_chamfer_distance()
+    sc.print()
+    print("HKS")
+    sc.compute_heat_kernel_signature()
+    sc.print()
+    # helper
+    # helper(sc.df)
 
   # TODO:
   # shape comparison:
-  # - hausdorff
-  # - spectral analysis via eigenvectors/values, laplacian
-
+  # [] make hks computationally more efficient
   # feature comparison:
-  # - crop out feature vectors for each rater
-  # - compare variance etc. in their centroids
+  # [] crop out feature vectors for each rater
+  # [] compare variance etc. in their centroids

@@ -1,7 +1,10 @@
+irrcac>=0.4.0
+libigl>=2.4.1
 numpy>=1.25.0
+opencv-python>=4.8.0
 open3d>=0.17.0
-pandas>=2.0.2
+pandas<=2.0.0
+POT>=0.9.1
 scikit-learn>=1.2.2
 statsmodels>=0.14.0
-scipy>=1.10.1
-irrcac>=0.4.0
+scipy==1.10.1
