@@ -9,9 +9,10 @@ import open3d as o3d
 import pandas as pd
 from scipy import stats
 from scipy.spatial.distance import directed_hausdorff
-from scipy.stats import kurtosis, skew, ttest_rel, mode
+from scipy.stats import kurtosis, skew, ttest_ind, mode
 from sklearn.metrics import cohen_kappa_score, accuracy_score, precision_score, recall_score, f1_score, jaccard_score
 from statsmodels.stats.inter_rater import fleiss_kappa
+import torch
 
 import geometry
 from features import Component
@@ -165,13 +166,14 @@ class Labels:
   def compute_interrater_reliability(self):
     combs = list(combinations(range(self.n_raters), 2))
     index = pd.MultiIndex.from_tuples(combs, names=("rater1", "rater2"))
-    df = pd.DataFrame(index=index, columns=self.scores)
+    df = pd.DataFrame(index=index)
     df[:] = None
     # ttests
     for score in self.scores:
       for comb in combs:
-        t_stat, p_val = ttest_rel(self.rater_dfs[comb[0]][score].values, self.rater_dfs[comb[1]][score].values)
-        df.loc[comb, score] = (t_stat, p_val)
+        t_stat, p_val = ttest_ind(self.rater_dfs[comb[0]][score].values, self.rater_dfs[comb[1]][score].values)
+        df.loc[comb, f"{score}_t_stat"] = t_stat
+        df.loc[comb, f"{score}_p_val"] = p_val
 
     # cohens kappa
     arrs = [np.concatenate(df["labels"]) for df in self.rater_dfs.values()]
@@ -212,21 +214,31 @@ class Labels:
       data.append([coeff_name, coeff_value, conf_interval, p_value, pa, pe])
     self.cacs = pd.DataFrame(data, columns=["coefficient", "value", "confidence interval", "p-value", "observed agreement (pa)", "expected agreement (pe)"])
   
+  def save_stats(self):
+    p = self.d / Path("dataframes/labels")
+    if not p.exists():
+      p.mkdir()
+    [df.drop(columns=["labels"]).to_csv(p / f"{SPLITS[i]}.csv", index=False) for i, df in enumerate(self.dfs)] # train/val/test
+    [df.drop(columns=["labels"]).to_csv(p / f"rater_{i}.csv", index=False) for i, df in self.rater_dfs.items()] # rater stats
+    self.stats_df.to_csv(p / "stats.csv", index=False) # general stats
+    self.interr_df.to_csv(p / "irr.csv", index=False) # inter-rater reliability
+    self.cacs.to_csv(p / "cac.csv", index=False) # chance-corrected agreement coefficients
+  
   def print_stats(self):
-    #print("Train/Val/Test:")
-    #[print(df) for df in self.dfs]
-    #print("Rater:")
+    print("Train/Val/Test:")
+    [print(df) for df in self.dfs]
+    print("Rater:")
     [print(df) for df in self.rater_dfs.values()]
-    #print("Top 5: Accuracy")
-    #print(self.top5(self.te_df, "avg_accuracy"))
-    #print("Bottom 5: Accuracy")
-    #print(self.bottom5(self.te_df, "avg_accuracy"))
-    #print("Stats")
-    #print(self.stats_df.T)
-    #print("Interrater-Reliability Analysis")
-    #print(self.interr_df)
-    #print("Chance-Corrected Agreement Coefficients")
-    #print(self.cacs)
+    print("Top 5: Accuracy")
+    print(self.top5(self.te_df, "avg_accuracy"))
+    print("Bottom 5: Accuracy")
+    print(self.bottom5(self.te_df, "avg_accuracy"))
+    print("Stats")
+    print(self.stats_df.T)
+    print("Interrater-Reliability Analysis")
+    print(self.interr_df)
+    print("Chance-Corrected Agreement Coefficients")
+    print(self.cacs)
 
 class Meshes:
   formats = ["off", "obj", "stl"]
@@ -300,6 +312,12 @@ class Meshes:
     self.mesh_df["n_vertices"] = self.mesh_df["n_vertices"].astype(int)
     self.mesh_df["n_faces"] = self.mesh_df["n_faces"].astype(int)
   
+  def save_stats(self):
+    p = self.d / Path("dataframes/meshes")
+    if not p.exists():
+      p.mkdir()
+    self.mesh_df.drop(columns=["mesh"]).to_csv(p / "mesh.csv", index=False)
+
   def print_stats(self): print(self.mesh_df)
 
 class FeatureComparison:
@@ -341,18 +359,20 @@ class FeatureComparison:
     )
     self.df = pd.DataFrame(index=multi_idx)
   
-  def print(self):
+  def print_stats(self):
     [print(df) for df in self.df_raters.values()]
     print(self.df)
 
 class ShapeComparison:
-  def __init__(self, df1, df2, fmts=("off", "stl")):
+  def __init__(self, d, df1, df2, fmts=("off", "stl"), device="cpu"):
+    self.d = d
     self.df1 = df1
     self.df2 = df2
     self.df_fmts = fmts
     self.df = pd.DataFrame(self.df1["id"])
     self.df.reset_index(drop=True, inplace=True)
-  
+    self.device = device
+
   def compute_hausdorff_distance(self):
     # directed hausdorff distance
     hausdorff_distances, max_indices, formats = [], [], []
@@ -404,19 +424,37 @@ class ShapeComparison:
       chamfer_distances.append(dist)
     self.df["chamfer_distance"] = chamfer_distances
 
-  def compute_heat_kernel_signature(self):
-    hks = []
-    n_time_scales = 16
-    time_scales = np.logspace(-2, 0., num=n_time_scales)
-    for (_, row1), (_, row2) in zip(self.df1.iterrows(), self.df2.iterrows()):
-      print("HKS1")
-      hks1 = geometry.compute_hks(np.asarray(row1["mesh"].vertices, dtype=np.float32), np.asarray(row1["mesh"].triangles, dtype=int), time_scales)
-      print("HKS2")
-      hks2 = geometry.compute_hks(np.asarray(row2["mesh"].vertices, dtype=np.float32), np.asarray(row2["mesh"].triangles, dtype=int), time_scales)
-      hks.append(geometry.compare_hks(hks1, hks2, n_time_scales))
-    self.df["heat_kernel_signature"] = hks
+  def compute_heat_kernel_signature(self, n_eig=16):
+    def compute_operators_row(row):
+      verts = torch.tensor(np.asarray(row["mesh"].vertices, dtype=np.float32))
+      faces = torch.tensor(np.asarray(row["mesh"].triangles, dtype=int))
+      verts = geometry.normalize_positions(verts)
+      _, _, _, evals, evecs, _, _ = geometry.get_operators(verts, faces, op_cache_dir="cache/")
+      evals, evecs = evals.to(self.device), evecs.to(self.device)
+      return evals, evecs
 
-  def print(self): print(self.df)
+    hks, hks_normalized = [], []
+    for (_, row1), (_, row2) in zip(self.df1.iterrows(), self.df2.iterrows()):
+      print(row1["id"])
+      evals1, evecs1 = compute_operators_row(row1)
+      hks1 = geometry.compute_hks_autoscale(evals1, evecs1, n_eig)
+      evals2, evecs2 = compute_operators_row(row2)
+      hks2 = geometry.compute_hks_autoscale(evals2, evecs2, n_eig)
+      hks_cmp, hks_cmp_normalized = geometry.compare_hks(hks1, hks2, n_eig)
+      hks.append(hks_cmp)
+      hks_normalized.append(hks_cmp_normalized)
+      print(hks_cmp)
+      print(hks_cmp_normalized)
+    self.df["heat_kernel_signature"] = hks
+    self.df["heat_kernel_signature_normalized"] = hks_cmp_normalized
+  
+  def save_stats(self):
+    p = self.d / Path("dataframes/shape_comparison")
+    if not p.exists():
+      p.mkdir()
+    self.df.to_csv(p / "geometric_similarity.csv", index=False)
+
+  def print_stats(self): print(self.df)
 
 def helper(df):
   for _, row in df.iterrows():
@@ -444,7 +482,8 @@ if __name__ == "__main__":
     lbls.compare_mv2avg()
     lbls.compute_interrater_reliability()
     lbls.chance_corrected_agreement_coefficients()
-    # print
+    # save / print
+    lbls.save_stats()
     lbls.print_stats()
 
   if True:
@@ -453,41 +492,34 @@ if __name__ == "__main__":
     off_meshes.load("off")
     off_meshes.compute_stats()
     off_meshes.print_stats()
-  if False:
+    off_meshes.save_stats()
+  if True:
     stl_meshes = Meshes(d=DATA_DIR)
     stl_meshes.load("stl")
     stl_meshes.compute_stats()
     stl_meshes.print_stats()
+    stl_meshes.save_stats()
 
-  # feature comparison
   if True:
     feature_compare = FeatureComparison(DATA_DIR, off_meshes.mesh_df, lbls.rater_dfs, n_classes=5)
     feature_compare.extract_features("off")
     feature_compare.convert()
-    feature_compare.print()
+    feature_compare.print_stats()
 
-  if False:
-    # shape comparison
+  if True:
     print("\nShape Comparison:")
-    sc = ShapeComparison(off_meshes.mesh_df, stl_meshes.mesh_df)
+    sc = ShapeComparison(DATA_DIR, off_meshes.mesh_df, stl_meshes.mesh_df)
     print("Hausdorff Distance")
     sc.compute_hausdorff_distance()
-    print("Optimal Transport Distance")
-    sc.compute_optimal_transport_distance()
-    print("Shape Distribution Distance")
-    sc.compute_shape_distribution_distance()
-    print("Chamfer Distance")
-    sc.compute_chamfer_distance()
-    sc.print()
+    #print("Optimal Transport Distance")
+    #sc.compute_optimal_transport_distance()
+    #print("Chamfer Distance")
+    #sc.compute_chamfer_distance()
+    #print("Shape Distribution Distance")
+    #sc.compute_shape_distribution_distance()
     print("HKS")
     sc.compute_heat_kernel_signature()
-    sc.print()
+    sc.print_stats()
+    sc.save_stats()
     # helper
     # helper(sc.df)
-
-  # TODO:
-  # shape comparison:
-  # [] make hks computationally more efficient
-  # feature comparison:
-  # [] crop out feature vectors for each rater
-  # [] compare variance etc. in their centroids
