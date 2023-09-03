@@ -3,7 +3,6 @@ import os
 
 import igl
 import numpy as np 
-import open3d as o3d
 import ot
 import potpourri3d as pp3d
 import robust_laplacian
@@ -11,7 +10,6 @@ import scipy
 import sklearn.neighbors
 import scipy.sparse.linalg as sla
 import scipy.spatial
-from scipy.stats import wasserstein_distance
 import torch
 
 import utils
@@ -70,15 +68,6 @@ def compare_hks(hks1, hks2, n_time_scales):
     total_normalized_distance += normalized_distance_t
   return total_distance / n_time_scales, total_normalized_distance / n_time_scales
 
-def pairwise_distances(X): return np.linalg.norm(X[:, None] - X[None, :], axis=-1)
-def shape_distribution_distance(x, y):
-  n_samples = len(x)
-  dist_x = pairwise_distances(x)
-  dist_y = pairwise_distances(y)
-  samples_x = np.random.choice(dist_x.flatten(), n_samples)
-  samples_y = np.random.choice(dist_y.flatten(), n_samples)
-  return wasserstein_distance(samples_x, samples_y)
-
 def optimal_transport_distance(pcd1, pcd2):
   weights_shape1 = np.ones(len(pcd1)) / len(pcd1)
   weights_shape2 = np.ones(len(pcd2)) / len(pcd2)
@@ -94,11 +83,6 @@ def arr2samples_distance(v1, v2):
   distances = np.sqrt(squared_distances)
   min_distances = np.min(distances, axis=1)
   return np.mean(min_distances)
-
-def chamfer_distance(v1, v2):
-  av_dist1 = arr2samples_distance(v1, v2)
-  av_dist2 = arr2samples_distance(v2, v1)
-  return (av_dist1 + av_dist2) / 2
 
 def norm(x): return torch.norm(x, dim=len(x.shape) - 1)
 def dot(vec_A, vec_B): return torch.sum(vec_A * vec_B, dim=-1)
@@ -625,41 +609,3 @@ def get_all_pairs_geodesic_distance(verts_np, faces_np, geodesic_cache_dir=None)
       print("saving geodesic distances to cache: " + str(geodesic_cache_dir))
       np.savez(search_path, verts=verts_np, faces=faces_np, dist=result_dists)
   return result_dists
-
-if __name__ == "__main__":
-  n_eig = 128
-  device = "cpu"
-  import pathlib
-  fnames = [i.stem for i in pathlib.Path("data/train/obj").glob("*.obj")]
-  fnames = ["0505055"]
-  for fname in fnames:
-    off = o3d.io.read_triangle_mesh(str("data/train/off/" + fname + ".off")).compute_vertex_normals()
-    stl = o3d.io.read_triangle_mesh(str("data/train/stl/" + fname + ".stl")).compute_vertex_normals()
-    print(f"OFF - n_vertices: {len(off.vertices)}")
-    print(f"STL - n_vertices: {len(stl.vertices)}")
-
-    verts1 = np.asarray(off.vertices, dtype=np.float32)
-    faces1 = np.asarray(off.triangles, dtype=int)
-    verts1 = torch.tensor(verts1)
-    faces1 = torch.tensor(faces1)
-    verts1 = normalize_positions(verts1)
-    _, _, _, evals1, evecs1, _, _ = get_operators(verts1, faces1, op_cache_dir="cache/")
-    evals1, evecs1 = evals1.to(device), evecs1.to(device)
-    hks1 = compute_hks_autoscale(evals1, evecs1, n_eig)
-    print(hks1)
-    print(hks1.shape)
-
-    verts2 = np.asarray(stl.vertices, dtype=np.float32)
-    faces2 = np.asarray(stl.triangles, dtype=int)
-    verts2 = torch.tensor(verts2)
-    faces2 = torch.tensor(faces2)
-    verts2 = normalize_positions(verts2)
-    _, _, _, evals2, evecs2, _, _ = get_operators(verts2, faces2, op_cache_dir="cache/")
-    evals2, evecs2 = evals2.to(device), evecs2.to(device)
-    hks2 = compute_hks_autoscale(evals2, evecs2, n_eig)
-    print(hks2)
-    print(hks2.shape)
-
-    n_time_scales = 16
-    dist, normalized_dist = compare_hks(hks1, hks2, n_time_scales)
-    print(dist, normalized_dist)

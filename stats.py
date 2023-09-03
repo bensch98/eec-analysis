@@ -1,4 +1,4 @@
-from concurrent.futures import ThreadPoolExecutor
+import csv
 from itertools import combinations
 from pathlib import Path
 import shutil
@@ -252,9 +252,6 @@ class Meshes:
     self.fnames["train"] = [i.stem for i in (self.d / "train" / "off").glob(f"*.off")]
     self.fnames["val"] = [i.stem for i in (self.d / "val" / "off").glob(f"*.off")]
     self.fnames["test"] = [i.stem for i in (self.d / "test" / "off").glob(f"*.off")]
-    #self.fnames["train"] = self.fnames["train"][:1]
-    #self.fnames["val"] = self.fnames["val"][:1]
-    #self.fnames["test"] = self.fnames["test"][:1]
     mesh_df = pd.DataFrame({
       "id": self.fnames["train"] + self.fnames["val"] + self.fnames["test"],
       "split": ["train"] * len(self.fnames["train"]) + ["val"] * len(self.fnames["val"]) + ["test"] * len(self.fnames["test"])
@@ -312,11 +309,11 @@ class Meshes:
     self.mesh_df["n_vertices"] = self.mesh_df["n_vertices"].astype(int)
     self.mesh_df["n_faces"] = self.mesh_df["n_faces"].astype(int)
   
-  def save_stats(self):
+  def save_stats(self, fname):
     p = self.d / Path("dataframes/meshes")
     if not p.exists():
       p.mkdir()
-    self.mesh_df.drop(columns=["mesh"]).to_csv(p / "mesh.csv", index=False)
+    self.mesh_df.drop(columns=["mesh"]).to_csv(p / f"{fname}.csv", index=False)
 
   def print_stats(self): print(self.mesh_df)
 
@@ -404,6 +401,12 @@ class ShapeComparison:
       v2 = np.asarray(row2["mesh"].sample_points_poisson_disk(n).points, dtype=int)
       dist = geometry.optimal_transport_distance(v1, v2)
       optimal_transport_distances.append(dist)
+
+    with open("optimal_transport.csv", mode="w", newline="") as f:
+      csv_writer = csv.writer(f)
+      for row in optimal_transport_distances:
+        csv_writer.writerow([row])
+
     self.df["optimal_transport_distance"] = optimal_transport_distances
   
   def compute_shape_distribution_distance(self):
@@ -445,8 +448,20 @@ class ShapeComparison:
       hks_normalized.append(hks_cmp_normalized)
       print(hks_cmp)
       print(hks_cmp_normalized)
+    print(hks)
+    print(hks_normalized)
+
+    with open("hks.csv", mode="w", newline="") as f:
+      csv_writer = csv.writer(f)
+      for row in hks:
+        csv_writer.writerow([row])
+    with open("hks_normalized.csv", mode="w", newline="") as f:
+      csv_writer = csv.writer(f)
+      for row in hks_normalized:
+        csv_writer.writerow([row])
+
     self.df["heat_kernel_signature"] = hks
-    self.df["heat_kernel_signature_normalized"] = hks_cmp_normalized
+    self.df["heat_kernel_signature_normalized"] = hks_normalized
   
   def save_stats(self):
     p = self.d / Path("dataframes/shape_comparison")
@@ -492,13 +507,13 @@ if __name__ == "__main__":
     off_meshes.load("off")
     off_meshes.compute_stats()
     off_meshes.print_stats()
-    off_meshes.save_stats()
+    off_meshes.save_stats("offs")
   if True:
     stl_meshes = Meshes(d=DATA_DIR)
     stl_meshes.load("stl")
     stl_meshes.compute_stats()
     stl_meshes.print_stats()
-    stl_meshes.save_stats()
+    stl_meshes.save_stats("stls")
 
   if True:
     feature_compare = FeatureComparison(DATA_DIR, off_meshes.mesh_df, lbls.rater_dfs, n_classes=5)
@@ -511,12 +526,8 @@ if __name__ == "__main__":
     sc = ShapeComparison(DATA_DIR, off_meshes.mesh_df, stl_meshes.mesh_df)
     print("Hausdorff Distance")
     sc.compute_hausdorff_distance()
-    #print("Optimal Transport Distance")
-    #sc.compute_optimal_transport_distance()
-    #print("Chamfer Distance")
-    #sc.compute_chamfer_distance()
-    #print("Shape Distribution Distance")
-    #sc.compute_shape_distribution_distance()
+    print("Optimal Transport Distance")
+    sc.compute_optimal_transport_distance()
     print("HKS")
     sc.compute_heat_kernel_signature()
     sc.print_stats()
