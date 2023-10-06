@@ -1,4 +1,3 @@
-import csv
 from itertools import combinations
 from pathlib import Path
 import shutil
@@ -254,7 +253,9 @@ class Meshes:
     self.fnames["test"] = [i.stem for i in (self.d / "test" / "off").glob(f"*.off")]
     mesh_df = pd.DataFrame({
       "id": self.fnames["train"] + self.fnames["val"] + self.fnames["test"],
+      #"id": self.fnames["test"][:5],
       "split": ["train"] * len(self.fnames["train"]) + ["val"] * len(self.fnames["val"]) + ["test"] * len(self.fnames["test"])
+      #"split": ["test"] * 5
     })
     return mesh_df
   
@@ -325,9 +326,9 @@ class FeatureComparison:
     self.df_raters = {k: pd.merge(self.df_meshes, df, on="id") for k, df in df_raters.items()}
     self.df_raters = {k: df[["id", "split", "mesh", "labels"]] for k, df in self.df_raters.items()}
   
-  def _extract_features(self, row, fmt):
+  def _extract_features(self, row, rater, fmt):
     split, mesh_id = row["split"], row["id"]
-    comp = Component(self.d, split, fmt, mesh_id, 5)
+    comp = Component(self.d, split, rater, fmt, mesh_id, 5)
     comp_features = comp.cluster_components()
     for val in comp_features.values():
       if not val: continue
@@ -337,28 +338,24 @@ class FeatureComparison:
     return comp_features
 
   def extract_features(self, fmt):
-    for df in self.df_raters.values():
-      df["features"] = df.apply(lambda row: self._extract_features(row, fmt), axis=1)
+    for i, df in self.df_raters.items():
+      df["features"] = df.apply(lambda row: self._extract_features(row, i, fmt), axis=1)
   
   def convert(self):
-    id_values, class_values, feature_values = [], [], []
-    for id, features_dict in self.df_raters[0][["id", "features"]].iterrows():
-      for class_id, features in features_dict.items():
-        for i, feature in enumerate(features):
-          id_values.append(id)
-          class_values.append(class_id)
-          feature_values.append(i)
+    for df_rater in self.df_raters.values():
+      for k in range(1, 5):
+        df_rater[f"feature_{k}_count"] = df_rater["features"].apply(lambda x: len(x[k]))
+        df_rater[f"feature_{k}_sa"] = df_rater["features"].apply(lambda x: sum(feature._sa for feature in x[k]))
 
-    id_values, class_values, feature_values = [], [], []
-    multi_idx = pd.MultiIndex.from_tuples(
-      list(zip(id_values, class_values, feature_values)),
-      names=["id", "class", "feature"]
-    )
-    self.df = pd.DataFrame(index=multi_idx)
+  def save_stats(self, fname):
+    p = self.d / Path("dataframes/features")
+    if not p.exists():
+      p.mkdir()
+    for i, df in self.df_raters.items():
+      df.drop(columns=["mesh", "labels", "features"]).to_csv(p / f"{fname}_{i}.csv", index=False)
   
   def print_stats(self):
     [print(df) for df in self.df_raters.values()]
-    print(self.df)
 
 class ShapeComparison:
   def __init__(self, d, df1, df2, fmts=("off", "stl"), device="cpu"):
@@ -401,12 +398,6 @@ class ShapeComparison:
       v2 = np.asarray(row2["mesh"].sample_points_poisson_disk(n).points, dtype=int)
       dist = geometry.optimal_transport_distance(v1, v2)
       optimal_transport_distances.append(dist)
-
-    with open("optimal_transport.csv", mode="w", newline="") as f:
-      csv_writer = csv.writer(f)
-      for row in optimal_transport_distances:
-        csv_writer.writerow([row])
-
     self.df["optimal_transport_distance"] = optimal_transport_distances
   
   def compute_shape_distribution_distance(self):
@@ -446,20 +437,6 @@ class ShapeComparison:
       hks_cmp, hks_cmp_normalized = geometry.compare_hks(hks1, hks2, n_eig)
       hks.append(hks_cmp)
       hks_normalized.append(hks_cmp_normalized)
-      print(hks_cmp)
-      print(hks_cmp_normalized)
-    print(hks)
-    print(hks_normalized)
-
-    with open("hks.csv", mode="w", newline="") as f:
-      csv_writer = csv.writer(f)
-      for row in hks:
-        csv_writer.writerow([row])
-    with open("hks_normalized.csv", mode="w", newline="") as f:
-      csv_writer = csv.writer(f)
-      for row in hks_normalized:
-        csv_writer.writerow([row])
-
     self.df["heat_kernel_signature"] = hks
     self.df["heat_kernel_signature_normalized"] = hks_normalized
   
@@ -485,8 +462,8 @@ def helper(df):
     return
 
 if __name__ == "__main__":
+  # labels analysis
   if True:
-    # labels analysis
     lbls = Labels(d=DATA_DIR, n_labels=5)
     lbls.load_raters()
     lbls.load()
@@ -501,13 +478,14 @@ if __name__ == "__main__":
     lbls.save_stats()
     lbls.print_stats()
 
+  # meshes analysis
   if True:
-    # meshes analysis
     off_meshes = Meshes(d=DATA_DIR)
     off_meshes.load("off")
     off_meshes.compute_stats()
     off_meshes.print_stats()
     off_meshes.save_stats("offs")
+
   if True:
     stl_meshes = Meshes(d=DATA_DIR)
     stl_meshes.load("stl")
@@ -515,22 +493,19 @@ if __name__ == "__main__":
     stl_meshes.print_stats()
     stl_meshes.save_stats("stls")
 
+  # feature similarity
   if True:
     feature_compare = FeatureComparison(DATA_DIR, off_meshes.mesh_df, lbls.rater_dfs, n_classes=5)
     feature_compare.extract_features("off")
     feature_compare.convert()
     feature_compare.print_stats()
+    feature_compare.save_stats("features_rater")
 
+  # geometric similarity
   if True:
-    print("\nShape Comparison:")
     sc = ShapeComparison(DATA_DIR, off_meshes.mesh_df, stl_meshes.mesh_df)
-    print("Hausdorff Distance")
     sc.compute_hausdorff_distance()
-    print("Optimal Transport Distance")
     sc.compute_optimal_transport_distance()
-    print("HKS")
     sc.compute_heat_kernel_signature()
     sc.print_stats()
     sc.save_stats()
-    # helper
-    # helper(sc.df)

@@ -185,9 +185,9 @@ class Component:
   colors = [[4, 30, 60], [106, 138, 34], [220, 30, 38], [255, 203, 0], [245, 130, 31]]
   colors = [[j / 255 for j in i] for i in colors]
 
-  def __init__(self, datadir: str, split: str, fmt: str, mesh_id: str, n_classes: int = 5):
+  def __init__(self, datadir: str, split: str, rater: int, fmt: str, mesh_id: str, n_classes: int = 5):
     self.fmesh = f"{datadir}/{split}/{fmt}/{mesh_id}.{fmt}"
-    self.ftxt = f"{datadir}/{split}/txt/{mesh_id}.txt"
+    self.ftxt = f"{datadir}/test_raters/{rater}/{mesh_id}.txt"
     self.n_classes = n_classes
     self.compfeatures = {k: [] for k in range(5)}
 
