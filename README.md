@@ -1,6 +1,7 @@
 # Analysis of Electrical and Electronic Components Dataset
 
 This repository can recreate all statistics mentioned in the corresponding paper.
+Link to open-access dataset: [Electrical and Electronic Components Dataset](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/D3ODGT)
 
 ## Files
 
@@ -33,3 +34,18 @@ Part Status       | Whether it was available when the CAD file was downloaded
 Part Description  | Description of the component
 External Document | URL to the acutal product page of the manufacturer, where the STEP file can be downloaded and further information can be scraped
 sha256            | sha256 hash to check for geometric unique STEP files
+
+## Citation
+
+To cite the data itself please use:
+```bibtex
+@data{DVN/D3ODGT_2023,
+  author    = {Scheffler, Benedikt and Bründl, Patrick},
+  publisher = {Harvard Dataverse},
+  title     = {{Electrical and Electronic Components Dataset}},
+  year      = {2023},
+  version   = {V1},
+  doi       = {10.7910/DVN/D3ODGT},
+  url       = {https://doi.org/10.7910/DVN/D3ODGT}
+}
+```
