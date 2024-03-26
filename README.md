@@ -37,10 +37,27 @@ sha256            | sha256 hash to check for geometric unique STEP files
 
 ## Citation
 
-To cite the data itself please use:
+To cite the data descriptor in `Nature Scientific Data` use:
+```bibtex
+@article{Scheffler2024,
+  author    = {Scheffler, Benedikt and Br\"{u}ndl, Patrick and Nguyen, Huong Giang and Stoidner, Micha and Franke, J\"{o}rg},
+  title     = {A Dataset of Electrical Components for Mesh Segmentation and Computational Geometry Research},
+  journal   = {Scientific Data},
+  volume    = {11},
+  number    = {1},
+  pages     = {309},
+  year      = {2024},
+  doi       = {10.1038/s41597-024-03155-w},
+  url       = {https://doi.org/10.1038/s41597-024-03155-w},
+  issn      = {2052-4463},
+  date      = {2024/03/22},
+}
+```
+
+To cite the data itself use:
 ```bibtex
 @data{DVN/D3ODGT_2023,
-  author    = {Scheffler, Benedikt and Bründl, Patrick},
+  author    = {Scheffler, Benedikt and Br\"{u}ndl, Patrick},
   publisher = {Harvard Dataverse},
   title     = {{Electrical and Electronic Components Dataset}},
   year      = {2023},
